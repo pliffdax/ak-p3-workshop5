@@ -21,17 +21,51 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include <stdbool.h>
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+typedef struct {
+  uint8_t note;
+  uint16_t duration_ms;
+  uint16_t led_pin;
+} BeepStep;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define CS43L22_I2C_ADDR              0x94
 
+#define CS43L22_REG_POWER_CTL1        0x02
+#define CS43L22_REG_POWER_CTL2        0x04
+#define CS43L22_REG_CLOCKING_CTL      0x05
+#define CS43L22_REG_INTERFACE_CTL1    0x06
+#define CS43L22_REG_MASTER_A_VOL      0x20
+#define CS43L22_REG_MASTER_B_VOL      0x21
+#define CS43L22_REG_BEEP_FREQ_ONTIME  0x1C
+#define CS43L22_REG_BEEP_VOL_OFFTIME  0x1D
+#define CS43L22_REG_BEEP_TONE_CFG     0x1E
+
+#define NOTE_C4   0x00
+#define NOTE_C5   0x10
+#define NOTE_D5   0x20
+#define NOTE_E5   0x30
+#define NOTE_F5   0x40
+#define NOTE_G5   0x50
+#define NOTE_A5   0x60
+#define NOTE_B5   0x70
+#define NOTE_C6   0x80
+#define NOTE_D6   0x90
+#define NOTE_E6   0xA0
+#define NOTE_F6   0xB0
+#define NOTE_G6   0xC0
+#define NOTE_A6   0xD0
+#define NOTE_B6   0xE0
+#define NOTE_C7   0xF0
+
+#define MELODY_REPEAT_COUNT 3
+#define I2S_BUFFER_SIZE     16
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -46,61 +80,38 @@ I2S_HandleTypeDef hi2s3;
 DMA_HandleTypeDef hdma_spi3_tx;
 
 /* USER CODE BEGIN PV */
-#define CS43L22_ADDR              (0x94)
+static uint16_t i2sBuffer[I2S_BUFFER_SIZE] = {0};
 
-#define CS43L22_REG_POWER_1       (0x02)
-#define CS43L22_REG_POWER_2       (0x04)
-#define CS43L22_REG_CLOCKING      (0x05)
-#define CS43L22_REG_INTERFACE_1   (0x06)
-#define CS43L22_REG_PLAYBACK_1    (0x0D)
-#define CS43L22_REG_MISC          (0x0E)
-#define CS43L22_REG_PCMA_VOL      (0x1A)
-#define CS43L22_REG_PCMB_VOL      (0x1B)
-#define CS43L22_REG_BEEP_FREQ     (0x1C)
-#define CS43L22_REG_BEEP_VOL      (0x1D)
-#define CS43L22_REG_BEEP_TONE     (0x1E)
-#define CS43L22_REG_MASTER_A_VOL  (0x20)
-#define CS43L22_REG_MASTER_B_VOL  (0x21)
-#define CS43L22_REG_HP_A_VOL      (0x22)
-#define CS43L22_REG_HP_B_VOL      (0x23)
+static const BeepStep melody[] = {
+  {NOTE_C5, 180, GPIO_PIN_12},
+  {NOTE_D5, 180, GPIO_PIN_13},
+  {NOTE_E5, 220, GPIO_PIN_14},
+  {NOTE_G5, 320, GPIO_PIN_15},
 
-#define CS43L22_BEEP_OFF          (0x00)
-#define CS43L22_BEEP_SINGLE       (0x40)
+  {NOTE_E5, 180, GPIO_PIN_14},
+  {NOTE_D5, 180, GPIO_PIN_13},
+  {NOTE_C5, 300, GPIO_PIN_12},
 
-#define BEEP_ON_TIME_SHORT        (0x00)
-#define BEEP_VOLUME_NORMAL        (0x06)
+  {NOTE_G5, 180, GPIO_PIN_15},
+  {NOTE_A5, 180, GPIO_PIN_12},
+  {NOTE_G5, 220, GPIO_PIN_13},
+  {NOTE_E5, 320, GPIO_PIN_14},
 
-typedef struct
-{
-  uint8_t frequency_code;
-  uint16_t duration_ms;
-  uint8_t led_index;
-} melody_note_t;
+  {NOTE_F5, 180, GPIO_PIN_15},
+  {NOTE_E5, 180, GPIO_PIN_14},
+  {NOTE_D5, 300, GPIO_PIN_13},
 
-static uint16_t i2s_silent_buffer[64] = {0};
+  {NOTE_C5, 180, GPIO_PIN_12},
+  {NOTE_E5, 180, GPIO_PIN_14},
+  {NOTE_G5, 220, GPIO_PIN_15},
+  {NOTE_C6, 360, GPIO_PIN_12},
 
-static const melody_note_t melody[] =
-{
-  {0x00, 220, 0},
-  {0x02, 220, 1},
-  {0x04, 220, 2},
-  {0x05, 260, 3},
-  {0x07, 260, 0},
-  {0x08, 300, 1},
-  {0x07, 220, 2},
-  {0x05, 380, 3},
+  {NOTE_G5, 180, GPIO_PIN_15},
+  {NOTE_E5, 180, GPIO_PIN_14},
+  {NOTE_C5, 420, GPIO_PIN_12}
 };
 
-static const uint32_t melody_len = sizeof(melody) / sizeof(melody[0]);
-
-static HAL_StatusTypeDef CS43L22_WriteReg(uint8_t reg, uint8_t value);
-static void CS43L22_Reset(void);
-static void CS43L22_InitCodec(void);
-static void CS43L22_BeepOff(void);
-static void CS43L22_PlayBeep(uint8_t frequency_code);
-static void LEDs_AllOff(void);
-static void LEDs_Show(uint8_t led_index);
-static void PlayMelodyThreeTimes(void);
+static const uint32_t melodyLength = sizeof(melody) / sizeof(melody[0]);
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -110,129 +121,78 @@ static void MX_DMA_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_I2S3_Init(void);
 /* USER CODE BEGIN PFP */
-
+static void CS43L22_WriteReg(uint8_t reg, uint8_t value);
+static void CS43L22_Init(void);
+static void CS43L22_PlayBeep(uint8_t note, uint16_t duration_ms, uint16_t led_pin);
+static void PlayMelodyOnce(void);
+static void PlayMelodyThreeTimes(void);
+static void StopAllLeds(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-static HAL_StatusTypeDef CS43L22_WriteReg(uint8_t reg, uint8_t value)
+static void CS43L22_WriteReg(uint8_t reg, uint8_t value)
 {
-  return HAL_I2C_Mem_Write(&hi2c1,
-                           CS43L22_ADDR,
-                           reg,
-                           I2C_MEMADD_SIZE_8BIT,
-                           &value,
-                           1,
-                           100);
+  uint8_t data[2] = {reg, value};
+  HAL_I2C_Master_Transmit(&hi2c1, CS43L22_I2C_ADDR, data, 2, HAL_MAX_DELAY);
 }
 
-static void CS43L22_Reset(void)
+static void CS43L22_Init(void)
 {
-  HAL_GPIO_WritePin(AUDIO_RST_GPIO_Port, AUDIO_RST_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_4, GPIO_PIN_RESET);
   HAL_Delay(10);
-  HAL_GPIO_WritePin(AUDIO_RST_GPIO_Port, AUDIO_RST_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_4, GPIO_PIN_SET);
   HAL_Delay(10);
+
+  CS43L22_WriteReg(CS43L22_REG_POWER_CTL1, 0x01);
+  CS43L22_WriteReg(CS43L22_REG_POWER_CTL2, 0xAF);
+  CS43L22_WriteReg(CS43L22_REG_CLOCKING_CTL, 0x81);
+  CS43L22_WriteReg(CS43L22_REG_INTERFACE_CTL1, 0x04);
+  CS43L22_WriteReg(CS43L22_REG_MASTER_A_VOL, 0x18);
+  CS43L22_WriteReg(CS43L22_REG_MASTER_B_VOL, 0x18);
+  CS43L22_WriteReg(CS43L22_REG_POWER_CTL1, 0x9E);
 }
 
-static void CS43L22_InitCodec(void)
+static void StopAllLeds(void)
 {
-  CS43L22_Reset();
-
-  CS43L22_WriteReg(CS43L22_REG_POWER_1, 0x01);
-  HAL_Delay(5);
-
-  CS43L22_WriteReg(CS43L22_REG_POWER_2, 0xAF);
-  CS43L22_WriteReg(CS43L22_REG_CLOCKING, 0x81);
-  CS43L22_WriteReg(CS43L22_REG_INTERFACE_1, 0x04);
-  CS43L22_WriteReg(CS43L22_REG_PLAYBACK_1, 0x00);
-  CS43L22_WriteReg(CS43L22_REG_MISC, 0x04);
-
-  CS43L22_WriteReg(CS43L22_REG_PCMA_VOL, 0x00);
-  CS43L22_WriteReg(CS43L22_REG_PCMB_VOL, 0x00);
-  CS43L22_WriteReg(CS43L22_REG_MASTER_A_VOL, 0x00);
-  CS43L22_WriteReg(CS43L22_REG_MASTER_B_VOL, 0x00);
-  CS43L22_WriteReg(CS43L22_REG_HP_A_VOL, 0x00);
-  CS43L22_WriteReg(CS43L22_REG_HP_B_VOL, 0x00);
-
-  CS43L22_BeepOff();
-
-  CS43L22_WriteReg(CS43L22_REG_POWER_1, 0x9E);
-  HAL_Delay(20);
+  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12 | GPIO_PIN_13 | GPIO_PIN_14 | GPIO_PIN_15, GPIO_PIN_RESET);
 }
 
-static void CS43L22_BeepOff(void)
+static void CS43L22_PlayBeep(uint8_t note, uint16_t duration_ms, uint16_t led_pin)
 {
-  CS43L22_WriteReg(CS43L22_REG_BEEP_TONE, CS43L22_BEEP_OFF);
+  if (duration_ms == 0) {
+    return;
+  }
+
+  StopAllLeds();
+
+  CS43L22_WriteReg(CS43L22_REG_BEEP_FREQ_ONTIME, note | 0x0F);
+  CS43L22_WriteReg(CS43L22_REG_BEEP_VOL_OFFTIME, 0x00);
+  CS43L22_WriteReg(CS43L22_REG_BEEP_TONE_CFG, 0xC0);
+
+  HAL_GPIO_WritePin(GPIOD, led_pin, GPIO_PIN_SET);
+  HAL_Delay(duration_ms);
+
+  CS43L22_WriteReg(CS43L22_REG_BEEP_TONE_CFG, 0x00);
+  StopAllLeds();
 }
 
-static void CS43L22_PlayBeep(uint8_t frequency_code)
+static void PlayMelodyOnce(void)
 {
-  uint8_t freq_on = (uint8_t)(((frequency_code & 0x0F) << 4) | BEEP_ON_TIME_SHORT);
-  uint8_t vol_off = BEEP_VOLUME_NORMAL;
-
-  CS43L22_BeepOff();
-  HAL_Delay(5);
-
-  CS43L22_WriteReg(CS43L22_REG_BEEP_FREQ, freq_on);
-  CS43L22_WriteReg(CS43L22_REG_BEEP_VOL, vol_off);
-  CS43L22_WriteReg(CS43L22_REG_BEEP_TONE, CS43L22_BEEP_SINGLE);
-}
-
-static void LEDs_AllOff(void)
-{
-  HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(LED_ORANGE_GPIO_Port, LED_ORANGE_Pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(LED_RED_GPIO_Port, LED_RED_Pin, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(LED_BLUE_GPIO_Port, LED_BLUE_Pin, GPIO_PIN_RESET);
-}
-
-static void LEDs_Show(uint8_t led_index)
-{
-  LEDs_AllOff();
-
-  switch (led_index)
-  {
-    case 0:
-      HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_SET);
-      break;
-
-    case 1:
-      HAL_GPIO_WritePin(LED_ORANGE_GPIO_Port, LED_ORANGE_Pin, GPIO_PIN_SET);
-      break;
-
-    case 2:
-      HAL_GPIO_WritePin(LED_RED_GPIO_Port, LED_RED_Pin, GPIO_PIN_SET);
-      break;
-
-    case 3:
-      HAL_GPIO_WritePin(LED_BLUE_GPIO_Port, LED_BLUE_Pin, GPIO_PIN_SET);
-      break;
-
-    default:
-      break;
+  for (uint32_t i = 0; i < melodyLength; i++) {
+    CS43L22_PlayBeep(melody[i].note, melody[i].duration_ms, melody[i].led_pin);
+    HAL_Delay(45);
   }
 }
 
 static void PlayMelodyThreeTimes(void)
 {
-  for (uint8_t repeat = 0; repeat < 3; repeat++)
-  {
-    for (uint32_t i = 0; i < melody_len; i++)
-    {
-      LEDs_Show(melody[i].led_index);
-      CS43L22_PlayBeep(melody[i].frequency_code);
-      HAL_Delay(melody[i].duration_ms);
-
-      CS43L22_BeepOff();
-      LEDs_AllOff();
-      HAL_Delay(70);
-    }
-
-    HAL_Delay(350);
+  for (uint32_t round = 0; round < MELODY_REPEAT_COUNT; round++) {
+    PlayMelodyOnce();
+    HAL_Delay(500);
   }
 
-  CS43L22_BeepOff();
-  LEDs_AllOff();
+  StopAllLeds();
 }
 /* USER CODE END 0 */
 
@@ -269,19 +229,12 @@ int main(void)
   MX_I2C1_Init();
   MX_I2S3_Init();
   /* USER CODE BEGIN 2 */
-  MX_GPIO_Init();
-  MX_DMA_Init();
-  MX_I2C1_Init();
-  MX_I2S3_Init();
+  if (HAL_I2S_Transmit_DMA(&hi2s3, i2sBuffer, I2S_BUFFER_SIZE) != HAL_OK)
+  {
+    Error_Handler();
+  }
 
-  HAL_I2S_Transmit_DMA(&hi2s3, i2s_silent_buffer, 64);
-
-  HAL_Delay(100);
-
-  CS43L22_InitCodec();
-
-  HAL_Delay(200);
-
+  CS43L22_Init();
   PlayMelodyThreeTimes();
   /* USER CODE END 2 */
 
@@ -450,12 +403,12 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15
-                          |AUDIO_RST_Pin, GPIO_PIN_RESET);
+                          |GPIO_PIN_4, GPIO_PIN_RESET);
 
   /*Configure GPIO pins : PD12 PD13 PD14 PD15
-                           AUDIO_RST_Pin */
+                           PD4 */
   GPIO_InitStruct.Pin = GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15
-                          |AUDIO_RST_Pin;
+                          |GPIO_PIN_4;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
